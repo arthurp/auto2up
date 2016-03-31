@@ -15,11 +15,18 @@ import scala.collection.JavaConversions._
 import javax.imageio.ImageWriter
 import javax.imageio.ImageIO
 import org.rogach.scallop.exceptions.ScallopException
+import java.io.IOException
+import java.util.zip.GZIPInputStream
+import java.io.FileInputStream
+import java.util.zip.ZipException
+import java.io.PipedOutputStream
+import java.io.PipedInputStream
 
 class Conf(args: Array[String]) extends ScallopConf(args) {
   version("auto2up 0.1")
   banner("""Usage: auto2up ... input
            |auto2up 2-ups PDFs in a slightly smart way.
+           |The input can be PS or Gzip'd PS if GhostScript's ps2pdf is available in the PATH.
            |Options:
            |""".stripMargin)
   footer("\n72 points is 1 inch. 1/8 inch is 9 points.\n")
@@ -72,7 +79,7 @@ object Main {
     val inputFile = new File(conf.inputFilename())
     val outputFile = new File(conf.outputFilename())
     for {
-      in <- managed(PDDocument.load(inputFile))
+      in <- managed(loadInput(inputFile))
       out <- managed(new PDDocument())
     } {
       val layerUtility = new LayerUtility(out)
@@ -209,5 +216,30 @@ object Main {
     r.setUpperRightY(a.getUpperRightY max b.getUpperRightY)
 
     r
+  }
+
+  def loadInput(inputFile: File) = {
+    if (!(inputFile.isFile() && inputFile.canRead()))
+      throw new IOException("Input file not readable")
+
+    try {
+      PDDocument.load(inputFile)
+    } catch {
+      case _: IOException => {
+        // Assume the PDF parse failed
+        val psStream = try {
+          new GZIPInputStream(new FileInputStream(inputFile))
+        } catch {
+          case _: ZipException => {
+            new FileInputStream(inputFile)
+          }
+        }
+        import scala.sys.process._
+        val pipeOutput = new PipedOutputStream()
+        val pipeInput = new PipedInputStream(pipeOutput)
+        val proc = "ps2pdf - -" #< psStream #> pipeOutput run()
+        PDDocument.load(pipeInput)
+      }
+    }
   }
 }
