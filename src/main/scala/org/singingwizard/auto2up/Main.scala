@@ -14,18 +14,39 @@ import org.apache.pdfbox.rendering.ImageType
 import scala.collection.JavaConversions._
 import javax.imageio.ImageWriter
 import javax.imageio.ImageIO
+import org.rogach.scallop.exceptions.ScallopException
+
+class Conf(args: Array[String]) extends ScallopConf(args) {
+  version("auto2up 0.1")
+  banner("""Usage: auto2up ... input
+           |auto2up 2-ups PDFs in a slightly smart way.
+           |Options:
+           |""".stripMargin)
+  val inputFilename = trailArg[String]("input", descr = "Input filename", required = false)
+  val outputFilename = opt[String]("output", descr = "Output filename",
+    default = inputFilename.get.map(i => i.stripSuffix(".pdf") + "-2up.pdf"))
+  val drawBox = opt[Boolean]("drawBox", descr = "Draw boxes around placed pages", default = Some(false))
+  val help = opt[Boolean]("help", descr = "Show this help", default = Some(false))
+  verify()
+}
 
 object Main {
   def main(args: Array[String]): Unit = {
-    object Conf extends ScallopConf(args) {
-      val inputFilename = trailArg[String]("input", descr = "Input filename", required = true)
-      val outputFilename = opt[String]("output", descr = "Output filename",
-        default = inputFilename.get.map(i => i.stripSuffix(".pdf") + "-2up.pdf"))
-      val drawBox = opt[Boolean]("drawBox", default = Some(false))
-      verify()
+    try {
+      val conf = new Conf(args)
+      if (!conf.help() && conf.inputFilename.isDefined) {
+        main(conf)
+      } else {
+        conf.printHelp()
+      }
+    } catch {
+      case ScallopException(msg) =>
+        println(msg)
     }
-    val inputFile = new File(Conf.inputFilename())
-    val outputFile = new File(Conf.outputFilename())
+  }
+  def main(conf: Conf): Unit = {
+    val inputFile = new File(conf.inputFilename())
+    val outputFile = new File(conf.outputFilename())
     for {
       in <- managed(PDDocument.load(inputFile))
       out <- managed(new PDDocument())
@@ -35,7 +56,7 @@ object Main {
       val renderer = new PDFRenderer(in)
 
       def findInkBox(pageNo: Int) = {
-        val dpi = 30f
+        val dpi = 100f
         val marginOfError = (dpi / 72 * 2) max 1
         val threshold = 255 - 50
 
@@ -80,23 +101,19 @@ object Main {
 
       val inkBoxes = for (pageNo <- 0 until in.getNumberOfPages) yield findInkBox(pageNo)
       val inkBoxSize = inkBoxes.map(_.createRetranslatedRectangle()).reduce(unionRect)
-      println(inkBoxSize)
 
       val shortEdgeMargin = 72f / 8
-      val longEdgeMargin = 72f / 8
+      val longEdgeMargin = 72f / 2
       val interMargin = 72f / 16
 
       val pageSize = new PDRectangle(PDRectangle.LETTER.getHeight, PDRectangle.LETTER.getWidth)
-      println(pageSize)
 
       val usedWidth = pageSize.getWidth - shortEdgeMargin * 2 - interMargin
       val usedHeight = pageSize.getHeight - longEdgeMargin * 2
-      println(usedWidth, usedHeight)
 
       val scaleForWidth = usedWidth / (inkBoxSize.getWidth * 2)
       val scaleForHeight = usedHeight / inkBoxSize.getHeight
       val scale = scaleForHeight min scaleForWidth
-      println(scaleForWidth, scaleForHeight, scale)
 
       val shortEdgeCenteringMargin = (pageSize.getWidth - inkBoxSize.getWidth * 2 * scale) / 3
       val interCenteringMargin = (pageSize.getWidth - inkBoxSize.getWidth * 2 * scale) / 3
@@ -107,17 +124,17 @@ object Main {
         //page.setRotation(90)
         out.addPage(page)
 
-        val inkBoxPairSize = if (pageNo + 1 < in.getNumberOfPages)
-          unionRect(inkBoxes(pageNo).createRetranslatedRectangle(), inkBoxes(pageNo + 1).createRetranslatedRectangle())
+        val inkBox = if (pageNo + 1 < in.getNumberOfPages)
+          unionRect(inkBoxes(pageNo), inkBoxes(pageNo + 1))
         else
-          inkBoxes(pageNo).createRetranslatedRectangle()
+          inkBoxes(pageNo)
 
-        val longEdgeCenteringMargin = (pageSize.getHeight - inkBoxPairSize.getHeight * scale) / 2
+        val longEdgeCenteringMargin = (pageSize.getHeight - inkBox.getHeight * scale) / 2
 
         for (subPage <- 0 to 1 if pageNo + subPage < in.getNumberOfPages) {
           val n = pageNo + subPage
           val embPage = layerUtility.importPageAsForm(in, n)
-          val inkBox = inkBoxes(n)
+          //val inkBox = inkBoxes(n)
           embPage.setBBox(inkBox)
 
           for (contentStream <- managed(new PDPageContentStream(out, page, PDPageContentStream.AppendMode.APPEND, false))) {
@@ -131,10 +148,9 @@ object Main {
             pageTransform.translate(-inkBox.getLowerLeftX, -inkBox.getLowerLeftY)
             pageTransform.translate(subPage * inkBoxSize.getWidth, 0)
 
-            println(pageTransform)
             contentStream.transform(pageTransform)
 
-            if (Conf.drawBox()) {
+            if (conf.drawBox()) {
               contentStream.moveTo(inkBox.getLowerLeftX, inkBox.getLowerLeftY)
               contentStream.lineTo(inkBox.getLowerLeftX, inkBox.getUpperRightY)
               contentStream.lineTo(inkBox.getUpperRightX, inkBox.getUpperRightY)
