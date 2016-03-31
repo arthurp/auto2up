@@ -22,10 +22,34 @@ class Conf(args: Array[String]) extends ScallopConf(args) {
            |auto2up 2-ups PDFs in a slightly smart way.
            |Options:
            |""".stripMargin)
-  val inputFilename = trailArg[String]("input", descr = "Input filename", required = false)
+  footer("\n72 points is 1 inch. 1/8 inch is 9 points.\n")
+  mainOptions = Seq(outputFilename)
+  val inputFilename = trailArg[String]("input", descr = "Input filename (really required, BUG)", required = false)
   val outputFilename = opt[String]("output", descr = "Output filename",
     default = inputFilename.get.map(i => i.stripSuffix(".pdf") + "-2up.pdf"))
-  val drawBox = opt[Boolean]("drawBox", descr = "Draw boxes around placed pages", default = Some(false))
+
+  val drawBox = opt[Boolean]("draw-box", 'b', descr = "Draw boxes around placed pages", default = Some(false))
+
+  val inkThreshold = opt[Float]("ink-threshold", 't',
+    descr = "The gray level to consider 'ink' on the page. (1.0 is white, 0.0 is full black)",
+    default = Some(0.95f))
+  val dpi = opt[Float]("dpi", 'd',
+    descr = "Rendering resolution used for analysis in DPI.",
+    default = Some(100f))
+  val inkMargin = opt[Float]("ink-margin", 'n',
+    descr = "Margin to leave around ink when cropping in points.",
+    default = Some(2f))
+
+  val shortEdgeMargin = opt[Float]("short-edge-margin", 's',
+    descr = "Margin on short paper edge in points.",
+    default = Some(9f))
+  val longEdgeMargin = opt[Float]("long-edge-margin", 'l',
+    descr = "Margin on long paper edge in points.",
+    default = Some(9f * 4))
+  val interMargin = opt[Float]("inter-margin", 'i',
+    descr = "Gap between pages placed on one sheet in points.",
+    default = Some(9f / 2))
+
   val help = opt[Boolean]("help", descr = "Show this help", default = Some(false))
   verify()
 }
@@ -56,9 +80,9 @@ object Main {
       val renderer = new PDFRenderer(in)
 
       def findInkBox(pageNo: Int) = {
-        val dpi = 100f
-        val marginOfError = (dpi / 72 * 2) max 1
-        val threshold = 255 - 50
+        val dpi = conf.dpi()
+        val marginOfError = (dpi / 72 * conf.inkMargin()) max 1
+        val threshold = 255 * conf.inkThreshold()
 
         val img = renderer.renderImageWithDPI(pageNo, dpi, ImageType.GRAY)
         //ImageIO.write(img, "PNG", new File("tmp.png"))
@@ -102,9 +126,9 @@ object Main {
       val inkBoxes = for (pageNo <- 0 until in.getNumberOfPages) yield findInkBox(pageNo)
       val inkBoxSize = inkBoxes.map(_.createRetranslatedRectangle()).reduce(unionRect)
 
-      val shortEdgeMargin = 72f / 8
-      val longEdgeMargin = 72f / 2
-      val interMargin = 72f / 16
+      val shortEdgeMargin = conf.shortEdgeMargin().toFloat // 72f / 8
+      val longEdgeMargin = conf.longEdgeMargin().toFloat // 72f / 2
+      val interMargin = conf.interMargin().toFloat // 72f / 16
 
       val pageSize = new PDRectangle(PDRectangle.LETTER.getHeight, PDRectangle.LETTER.getWidth)
 
@@ -131,17 +155,23 @@ object Main {
 
         val longEdgeCenteringMargin = (pageSize.getHeight - inkBox.getHeight * scale) / 2
 
+        def markInkBox(contentStream: PDPageContentStream) = {
+          contentStream.moveTo(inkBox.getLowerLeftX, inkBox.getLowerLeftY)
+          contentStream.lineTo(inkBox.getLowerLeftX, inkBox.getUpperRightY)
+          contentStream.lineTo(inkBox.getUpperRightX, inkBox.getUpperRightY)
+          contentStream.lineTo(inkBox.getUpperRightX, inkBox.getLowerLeftY)
+          contentStream.lineTo(inkBox.getLowerLeftX, inkBox.getLowerLeftY)
+        }
+
         for (subPage <- 0 to 1 if pageNo + subPage < in.getNumberOfPages) {
           val n = pageNo + subPage
           val embPage = layerUtility.importPageAsForm(in, n)
           //val inkBox = inkBoxes(n)
-          embPage.setBBox(inkBox)
 
           for (contentStream <- managed(new PDPageContentStream(out, page, PDPageContentStream.AppendMode.APPEND, false))) {
             contentStream.saveGraphicsState();
 
             val pageTransform = new Matrix()
-            //tr.rotate(90 * degrees)
             pageTransform.translate(shortEdgeCenteringMargin, longEdgeCenteringMargin)
             pageTransform.translate(subPage * interCenteringMargin, 0)
             pageTransform.scale(scale, scale)
@@ -151,13 +181,13 @@ object Main {
             contentStream.transform(pageTransform)
 
             if (conf.drawBox()) {
-              contentStream.moveTo(inkBox.getLowerLeftX, inkBox.getLowerLeftY)
-              contentStream.lineTo(inkBox.getLowerLeftX, inkBox.getUpperRightY)
-              contentStream.lineTo(inkBox.getUpperRightX, inkBox.getUpperRightY)
-              contentStream.lineTo(inkBox.getUpperRightX, inkBox.getLowerLeftY)
-              contentStream.lineTo(inkBox.getLowerLeftX, inkBox.getLowerLeftY)
+              markInkBox(contentStream)
               contentStream.closeAndStroke()
             }
+
+            markInkBox(contentStream)
+            contentStream.clip()
+
             contentStream.drawForm(embPage)
             contentStream.restoreGraphicsState()
           }
