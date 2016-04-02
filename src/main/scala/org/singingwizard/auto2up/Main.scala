@@ -57,7 +57,7 @@ class Conf(args: Array[String]) extends ScallopConf(args) {
     descr = "Gap between pages placed on one sheet in points.",
     default = Some(9f / 2))
 
-  val recenter = toggle("recenter", short = 'c',
+  val recenter = toggle("recenter",
     descrYes = "Recenter all pages by cropping each page based on it's own ink box.",
     descrNo = "Crop all pages in the exact same way based on the combined ink box.",
     default = Some(false))
