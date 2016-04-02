@@ -56,10 +56,15 @@ class Conf(args: Array[String]) extends ScallopConf(args) {
   val interMargin = opt[Float]("inter-margin", 'i',
     descr = "Gap between pages placed on one sheet in points.",
     default = Some(9f / 2))
-    
+
+  val recenter = toggle("recenter", short = 'c',
+    descrYes = "Recenter all pages by cropping each page based on it's own ink box.",
+    descrNo = "Crop all pages in the exact same way based on the combined ink box.",
+    default = Some(false))
+
   val verbose = tally("verbose", descr = "Increase verbosity")
   val quiet = tally("quiet", descr = "Decrease verbosity")
-  
+
   def verbosity = verbose() - quiet()
 
   val help = opt[Boolean]("help", descr = "Show this help", default = Some(false))
@@ -126,15 +131,16 @@ object Main {
       // Get the ink boxes of each page
       val inkBoxes = for (pageNo ← 0 until in.getNumberOfPages) yield findInkBox(pageNo)
       // Compute the largest SIZE the can contain any of the boxes.
-      val inkBoxSize = inkBoxes.map(_.createRetranslatedRectangle()).reduce(unionRect)
+      // If we are not recentering compute the union of all the boxes instead.
+      val inkBoxSize = inkBoxes.map(r ⇒ if (conf.recenter()) r.createRetranslatedRectangle() else r).reduce(unionRect)
 
       // Compute the scale needed to fit the input pages perfectly in the width and height
       val scaleForWidth = usedSize.getWidth / (inkBoxSize.getWidth * 2)
       val scaleForHeight = usedSize.getHeight / inkBoxSize.getHeight
       // Set scale to the minimum of the two so everything will fit
       val scale = scaleForHeight min scaleForWidth
-      
-      trace(0, s"Scale: ${scale.formatted("%.2f")}")
+
+      trace(0, s"Scale: ${(scale * 100).formatted("%.1f")}")
 
       // Compute the margins needed to horizontally center everything properly for pages of size inkBoxSize
       val shortEdgeCenteringMargin = (pageSize.getWidth - inkBoxSize.getWidth * 2 * scale) / 3
@@ -148,10 +154,12 @@ object Main {
         out.addPage(page)
 
         // Compute the actual ink box for this pair of pages based on the pair itself
-        val inkBox = if (pageNo + 1 < in.getNumberOfPages)
+        val pairInkBox = if (pageNo + 1 < in.getNumberOfPages)
           unionRect(inkBoxes(pageNo), inkBoxes(pageNo + 1))
         else
           inkBoxes(pageNo)
+
+        val inkBox = if (conf.recenter()) pairInkBox else inkBoxSize
 
         // Vertically centering margin
         val longEdgeCenteringMargin = (pageSize.getHeight - inkBox.getHeight * scale) / 2
@@ -165,7 +173,7 @@ object Main {
             // Import the page as a Form XObject
             val embPage = layerUtility.importPageAsForm(in, n)
 
-            contentStream.saveGraphicsState();
+            contentStream.saveGraphicsState()
 
             // Compute the transform for this page
             val pageTransform = new Matrix()
@@ -180,16 +188,19 @@ object Main {
 
             contentStream.transform(pageTransform)
 
-            if (conf.drawBox()) {
-              markRectangle(contentStream, inkBox)
-              contentStream.closeAndStroke()
-            }
-
-            // Setup clipping for the page render
+            // Draw clipped page
+            contentStream.saveGraphicsState()
             markRectangle(contentStream, inkBox)
             contentStream.clip()
             // Draw the input page to the output
             contentStream.drawForm(embPage)
+            contentStream.restoreGraphicsState()
+
+            // Draw the box if requested. On top of page without clipping.
+            if (conf.drawBox()) {
+              markRectangle(contentStream, inkBox)
+              contentStream.closeAndStroke()
+            }
 
             contentStream.restoreGraphicsState()
           }
@@ -295,9 +306,9 @@ object Main {
     contentStream.lineTo(box.getUpperRightX, box.getLowerLeftY)
     contentStream.lineTo(box.getLowerLeftX, box.getLowerLeftY)
   }
-  
-  def trace(level: Int, msg: => String)(implicit conf: Conf) {
-    if(level <= conf.verbosity)
+
+  def trace(level: Int, msg: ⇒ String)(implicit conf: Conf) {
+    if (level <= conf.verbosity)
       println(msg)
   }
 }
