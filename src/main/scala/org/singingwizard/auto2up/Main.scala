@@ -113,9 +113,9 @@ object Main {
     val outputFile = new File(conf.outputFilename())
 
     if (!(inputFile.isFile() && inputFile.canRead()))
-      throw new IOException("Input file not readable")
-    if (!outputFile.canWrite() || (outputFile.exists() && !outputFile.isFile()))
-      throw new IOException("Output file not writable (check permissions and what is there now)")
+      throw new IOException(s"Input file not readable: $inputFile")
+    if (outputFile.exists() && (!outputFile.canWrite() || !outputFile.isFile()))
+      throw new IOException(s"Output file not writable (check permissions and what is there now): $outputFile")
     if (outputFile.exists())
       trace(-1, s"$outputFile already exists. Overwriting.")
 
