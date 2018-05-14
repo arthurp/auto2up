@@ -74,8 +74,9 @@ class Conf(args: Array[String]) extends ScallopConf(args) {
     */
   def outputFilenameForFilename(fn: String): String = {
     val nameStart = fn.lastIndexOf(File.separator) max 0
-    val extStart = fn.indexOf('.', nameStart)
-    val sansExt = if (extStart < 0) fn else fn.substring(0, extStart)
+    def negNone(i: Int): Option[Int] = if (i < 0) None else Some(i)
+    val extStart = negNone(fn.lastIndexOf(".pdf")).orElse(negNone(fn.lastIndexOf(".ps"))).orElse(negNone(fn.lastIndexOf(".")))
+    val sansExt = extStart.map(fn.substring(0, _)).getOrElse(fn)
     sansExt + "-2up.pdf"
   }
 }
